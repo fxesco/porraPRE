@@ -3006,52 +3006,15 @@ function calcPlayoffPointsForPlayer(jugador) {
     final:         { resultado: 0, equipo: 0 },
   };
 
-  // ── Bonus de FASE DE GRUPOS → DIECISEISAVOS (van dentro de "dieciseisavos.equipo") ──
-  // Solo se otorgan cuando la clasificación de ese grupo ya es DEFINITIVA
-  // (3 jornadas jugadas por los 4 equipos). Con la fase de grupos ya
-  // congelada (GRUPOS_FINAL), todos los grupos están confirmados, así que
-  // esto simplemente compara el pronóstico de cada jugador contra el
-  // resultado final ya fijado.
-  //
-  // Dos conceptos posibles, sin duplicarse entre sí para el mismo equipo:
-  //  1) 1º o 2º exacto del grupo → ptsClasifGrupos.
-  //  2) 3º clasificado como "mejor tercero" → mismo valor ptsClasifGrupos,
-  //     solo para los grupos cuyo tercero está entre los 8 mejores
-  //     (GRUPOS_TERCERO_CLASIFICADO).
-  const ptsClasifGrupos = CONFIG.PTS['Fase de grupos']?.clasificado || 0;
-  let ptsBonusGrupos = 0, aciertosClasifGrupos = 0;
-
-  const letrasGrupos = Object.keys(state.groupStandings || {});
-  const letrasTercerosConfirmados = buildTercerosConfirmados();
-
-  letrasGrupos.forEach(letra => {
-    const posPick = picks.find(p => p.partido_id === `pos-${letra}`);
-    if (!posPick) return;
-    const tabla = state.groupStandings[letra] || [];
-
-    // 1º y 2º exacto
-    for (let pos = 1; pos <= 2; pos++) {
-      const equipoPron = posPick[`pos${pos}`];
-      const equipoRealEnEstaPos = tabla[pos-1]?.equipo;
-      if (!equipoPron || !equipoRealEnEstaPos) continue;
-      if (normEquipo(equipoPron) === normEquipo(equipoRealEnEstaPos)) {
-        ptsBonusGrupos += ptsClasifGrupos;
-        aciertosClasifGrupos++;
-      }
-    }
-
-    // 3º clasificado como mejor tercero, solo si ese grupo está entre los
-    // 8 que mandaron a su tercero a dieciseisavos
-    if (letrasTercerosConfirmados.includes(letra)) {
-      const equipoPron3 = posPick.pos3;
-      const equipoReal3 = tabla[2]?.equipo; // el que realmente quedó 3º de ESTE grupo
-      if (equipoPron3 && equipoReal3 && normEquipo(equipoPron3) === normEquipo(equipoReal3)) {
-        ptsBonusGrupos += ptsClasifGrupos;
-        aciertosClasifGrupos++;
-      }
-    }
-  });
-  desglose.dieciseisavos.equipo += ptsBonusGrupos;
+  // NOTA: el bonus de "fase de grupos → dieciseisavos" (acertar qué equipo
+  // clasifica de cada grupo, en cualquier posición) ya NO se suma aquí.
+  // Esa puntuación vive ahora exclusivamente en "Equipos 1/16"
+  // (calcPosGruposYEquiposClasificados), que reproduce la fórmula real del
+  // Excel de control. Antes se sumaba en los dos sitios a la vez (doble
+  // conteo) — desde aquí en adelante, "dieciseisavos.equipo" SOLO contiene
+  // el acierto de qué equipo avanza de dieciseisavos a octavos (un cruce
+  // real de R16 con resultado), nunca el de fase de grupos.
+  const aciertosClasifGrupos = 0;
 
   RONDAS_ELIMINATORIA.forEach(ronda => {
     let ptsResultadoRonda = 0, ptsClasifRonda = 0;
@@ -3325,12 +3288,17 @@ function renderRanking() {
       <th class="sub-stat" style="text-align:center">Grupos</th>
       <th class="sub-stat" style="text-align:center">Pos. Grupos</th>
       <th class="sub-stat" style="text-align:center">Equipos 1/16</th>
-      <th class="sub-stat" style="text-align:center">16avos</th>
-      <th class="sub-stat" style="text-align:center">8vos</th>
-      <th class="sub-stat" style="text-align:center">4tos</th>
-      <th class="sub-stat" style="text-align:center">Semis</th>
-      <th class="sub-stat" style="text-align:center">3º/4º</th>
-      <th class="sub-stat" style="text-align:center">Final</th>
+      <th class="sub-stat" style="text-align:center">Partidos 1/16</th>
+      <th class="sub-stat" style="text-align:center">Equipos 1/8</th>
+      <th class="sub-stat" style="text-align:center">Partidos 1/8</th>
+      <th class="sub-stat" style="text-align:center">Equipos 1/4</th>
+      <th class="sub-stat" style="text-align:center">Partidos 1/4</th>
+      <th class="sub-stat" style="text-align:center">Equipos 1/2</th>
+      <th class="sub-stat" style="text-align:center">Partidos 1/2</th>
+      <th class="sub-stat" style="text-align:center">Equipos 3-4</th>
+      <th class="sub-stat" style="text-align:center">Partido 3-4</th>
+      <th class="sub-stat" style="text-align:center">Equipos Final</th>
+      <th class="sub-stat" style="text-align:center">Partido Final</th>
       <th class="sub-stat" style="text-align:center">Predic.</th>
       <th class="sub-stat" style="text-align:center">Premios</th>
     </tr></thead><tbody>`;
@@ -3355,6 +3323,20 @@ function renderRanking() {
     const detalle = partes.length ? `<div style="font-size:0.62rem;color:var(--muted);margin-top:0.1rem">${partes.join('·')}</div>` : '';
     return `<div class="pts-cell-clickable" onclick="showDetalle('${jugador}','${rondaKey}')">${num}${detalle}</div>`;
   };
+  // Columna "Equipos X": puntos por acertar qué equipo avanza a la
+  // siguiente ronda (rondaObj.equipo). Para dieciseisavos, este valor ya
+  // incluye el bonus de fase de grupos (ver calcPosGruposYEquiposClasificados,
+  // se muestra como "Equipos 1/16" reutilizando ptsEquipos116 directamente).
+  const cellEquipos = (jugador, key, val) => {
+    const num = val > 0 ? `<span style="color:var(--lime);font-weight:600">${val}</span>` : `<span style="color:var(--muted)">${val}</span>`;
+    return `<div class="pts-cell-clickable" onclick="showDetalle('${jugador}','${key}')">${num}</div>`;
+  };
+  // Columna "Partidos X": puntos por resultado de los cruces de esa ronda
+  // (rondaObj.resultado), sin el bonus de equipo.
+  const cellPartidos = (jugador, key, val) => {
+    const num = val > 0 ? `<span style="color:var(--lime);font-weight:600">${val}</span>` : `<span style="color:var(--muted)">${val}</span>`;
+    return `<div class="pts-cell-clickable" onclick="showDetalle('${jugador}','${key}')">${num}</div>`;
+  };
   const cellSimple = (jugador, key, val, aciertos) => {
     const num = val > 0 ? `<span style="color:var(--lime);font-weight:600">${val}</span>` : `<span style="color:var(--muted)">${val}</span>`;
     const detalle = (aciertos && aciertos.length) ? `<div style="font-size:0.62rem;color:var(--muted);margin-top:0.1rem">${aciertos.join('·')}</div>` : '';
@@ -3368,13 +3350,18 @@ function renderRanking() {
       <td class="pts" style="text-align:center;cursor:pointer" onclick="showDetalle('${r.nombre}','total')">${r.pts}</td>
       <td style="text-align:center">${cellGrupos(r.nombre, r.ptsGrupos, r.exactos, r.signos)}</td>
       <td style="text-align:center">${cellSimple(r.nombre, 'posGrupos', r.ptsPosGrupos, r.aciertosPosGrupos ? [`Aciertos:${r.aciertosPosGrupos}`] : [])}</td>
-      <td style="text-align:center">${cellSimple(r.nombre, 'equipos116', r.ptsEquipos116, r.aciertosEquipos116 ? [`Equipos:${r.aciertosEquipos116}`] : [])}</td>
-      <td style="text-align:center">${cellRonda(r.nombre, 'dieciseisavos', r.dieciseisavos)}</td>
-      <td style="text-align:center">${cellRonda(r.nombre, 'octavos', r.octavos)}</td>
-      <td style="text-align:center">${cellRonda(r.nombre, 'cuartos', r.cuartos)}</td>
-      <td style="text-align:center">${cellRonda(r.nombre, 'semifinal', r.semifinal)}</td>
-      <td style="text-align:center">${cellRonda(r.nombre, 'tercerPuesto', r.tercerPuesto)}</td>
-      <td style="text-align:center">${cellRonda(r.nombre, 'final', r.final)}</td>
+      <td style="text-align:center">${cellEquipos(r.nombre, 'equipos116', r.ptsEquipos116)}</td>
+      <td style="text-align:center">${cellPartidos(r.nombre, 'partidos16', r.dieciseisavos.resultado)}</td>
+      <td style="text-align:center">${cellEquipos(r.nombre, 'equipos8', r.octavos.equipo)}</td>
+      <td style="text-align:center">${cellPartidos(r.nombre, 'partidos8', r.octavos.resultado)}</td>
+      <td style="text-align:center">${cellEquipos(r.nombre, 'equipos4', r.cuartos.equipo)}</td>
+      <td style="text-align:center">${cellPartidos(r.nombre, 'partidos4', r.cuartos.resultado)}</td>
+      <td style="text-align:center">${cellEquipos(r.nombre, 'equipos2', r.semifinal.equipo)}</td>
+      <td style="text-align:center">${cellPartidos(r.nombre, 'partidos2', r.semifinal.resultado)}</td>
+      <td style="text-align:center">${cellEquipos(r.nombre, 'equipos34', r.tercerPuesto.equipo)}</td>
+      <td style="text-align:center">${cellPartidos(r.nombre, 'partido34', r.tercerPuesto.resultado)}</td>
+      <td style="text-align:center">${cellEquipos(r.nombre, 'equiposFinal', r.final.equipo)}</td>
+      <td style="text-align:center">${cellPartidos(r.nombre, 'partidoFinal', r.final.resultado)}</td>
       <td style="text-align:center">${cellSimple(r.nombre, 'predicciones', r.ptsPredicciones, r.aciertosPredicciones)}</td>
       <td style="text-align:center">${cellSimple(r.nombre, 'premios', r.ptsPremios, r.aciertosPremios)}</td>
     </tr>`;
@@ -3383,8 +3370,8 @@ function renderRanking() {
   html += '</tbody></table></div>';
   html += `<div style="margin-top:0.75rem;font-size:0.72rem;color:var(--muted);line-height:1.5">
     <strong style="color:var(--white)">Grupos:</strong> Ex = resultados exactos, Si = solo signo acertado (solo puntos por el resultado de cada partido).
-    <strong style="color:var(--white)">16avos:</strong> Res = resultado de los cruces de dieciseisavos. Eq = puntos por equipo: acertar qué selecciones clasifican de la fase de grupos (1º/2º exacto de cada grupo) y qué equipos avanzan a octavos.
-    <strong style="color:var(--white)">Resto de rondas:</strong> Res = resultado del cruce, Eq = acertar el equipo que avanza a la siguiente ronda.
+    <strong style="color:var(--white)">Pos. Grupos:</strong> acertar la posición exacta (1º-4º) de cada grupo, 3 pts por acierto.
+    <strong style="color:var(--white)">Equipos X:</strong> acertar qué equipo avanza a esa ronda (en 1/16 incluye también el acierto de clasificación de fase de grupos). <strong style="color:var(--white)">Partidos X:</strong> resultado del cruce de esa ronda (signo/diferencia/exacto).
     <br>Haz clic en cualquier número para ver el detalle completo.
   </div>`;
   document.getElementById('ranking-content').innerHTML = html;
@@ -3528,78 +3515,67 @@ function showDetalle(jugador, concepto) {
     });
   }
 
-  else if (['dieciseisavos','octavos','cuartos','semifinal','tercerPuesto','final'].includes(concepto)) {
+  else if (['dieciseisavos','octavos','cuartos','semifinal','tercerPuesto','final',
+            'partidos16','equipos8','partidos8','equipos4','partidos4',
+            'equipos2','partidos2','equipos34','partido34','equiposFinal','partidoFinal'].includes(concepto)) {
+    // Mapeo concepto → { rondaKey, modo }. modo 'resultado' muestra solo las
+    // filas de "Partidos X" (signo/diff/exacto del cruce); modo 'equipo'
+    // muestra solo las de "Equipos X" (qué equipo avanza); modo 'ambos' es
+    // el comportamiento combinado original (se mantiene por si algo más en
+    // la app sigue llamando a showDetalle con la clave de ronda original).
+    const MAPA_CONCEPTO = {
+      dieciseisavos: { rondaKey: 'dieciseisavos', modo: 'ambos' },
+      octavos:       { rondaKey: 'octavos',       modo: 'ambos' },
+      cuartos:       { rondaKey: 'cuartos',       modo: 'ambos' },
+      semifinal:     { rondaKey: 'semifinal',     modo: 'ambos' },
+      tercerPuesto:  { rondaKey: 'tercerPuesto',  modo: 'ambos' },
+      final:         { rondaKey: 'final',         modo: 'ambos' },
+      partidos16:    { rondaKey: 'dieciseisavos', modo: 'resultado' },
+      equipos8:      { rondaKey: 'octavos',       modo: 'equipo' },
+      partidos8:     { rondaKey: 'octavos',       modo: 'resultado' },
+      equipos4:      { rondaKey: 'cuartos',       modo: 'equipo' },
+      partidos4:     { rondaKey: 'cuartos',       modo: 'resultado' },
+      equipos2:      { rondaKey: 'semifinal',     modo: 'equipo' },
+      partidos2:     { rondaKey: 'semifinal',     modo: 'resultado' },
+      equipos34:     { rondaKey: 'tercerPuesto',  modo: 'equipo' },
+      partido34:     { rondaKey: 'tercerPuesto',  modo: 'resultado' },
+      equiposFinal:  { rondaKey: 'final',         modo: 'equipo' },
+      partidoFinal:  { rondaKey: 'final',         modo: 'resultado' },
+    };
+    const { rondaKey: concepto2, modo } = MAPA_CONCEPTO[concepto];
     const nombres = { dieciseisavos:'Dieciseisavos', octavos:'Octavos', cuartos:'Cuartos', semifinal:'Semifinal', tercerPuesto:'3º/4º puesto', final:'Final' };
-    titulo = `${nombres[concepto]} · ${jugador}`;
+    const sufijoTitulo = modo === 'resultado' ? ' (partidos)' : modo === 'equipo' ? ' (equipos)' : '';
+    titulo = `${nombres[concepto2]}${sufijoTitulo} · ${jugador}`;
 
-    // Bonus de fase de grupos → dieciseisavos (solo aparece en esta ronda).
-    // Con la fase de grupos congelada, simplemente compara el pronóstico de
-    // cada jugador contra la clasificación final ya fijada. El 3º puesto
-    // suma lo mismo, pero solo para los grupos cuyo tercero pasó entre los
-    // 8 mejores (GRUPOS_TERCERO_CLASIFICADO).
-    if (concepto === 'dieciseisavos') {
-      const ptsClasifGrupos = CONFIG.PTS['Fase de grupos']?.clasificado || 0;
-      const letrasGrupos = Object.keys(state.groupStandings || {});
-      const letrasTercerosConfirmados = buildTercerosConfirmados();
-
-      letrasGrupos.sort().forEach(letra => {
-        const posPick = picks.find(p => p.partido_id === `pos-${letra}`);
-        if (!posPick) return;
-        const tabla = state.groupStandings[letra] || [];
-        const grupoConfirmado = !!tabla.completo;
-
-        if (grupoConfirmado) {
-          for (let pos = 1; pos <= 2; pos++) {
-            const equipoPron = posPick[`pos${pos}`];
-            if (!equipoPron) continue;
-            const equipoRealEnEstaPos = tabla[pos-1]?.equipo;
-            if (equipoRealEnEstaPos && normEquipo(equipoPron) === normEquipo(equipoRealEnEstaPos)) {
-              filas.push({
-                label: `Grupo ${letra} 🔒, ${pos}º pronosticado: ${getFlag(equipoPron)} ${equipoPron}`,
-                pts: ptsClasifGrupos,
-                sub: `equipo clasificado en ${pos}º posición exacta`
-              });
-            }
-          }
-        }
-
-        if (letrasTercerosConfirmados.includes(letra)) {
-          const equipoPron3 = posPick.pos3;
-          const equipoReal3 = tabla[2]?.equipo;
-          if (equipoPron3 && equipoReal3 && normEquipo(equipoPron3) === normEquipo(equipoReal3)) {
-            filas.push({
-              label: `Grupo ${letra} 🔒, 3º pronosticado: ${getFlag(equipoPron3)} ${equipoPron3}`,
-              pts: ptsClasifGrupos,
-              sub: 'mejor tercero clasificado'
-            });
-          }
-        }
-      });
-    }
+    // NOTA: el bonus de "fase de grupos → dieciseisavos" ya no se muestra
+    // aquí — vive exclusivamente en el modal de "Equipos 1/16" (mismo
+    // concepto, una sola vez, sin duplicar el desglose).
 
     // Resultado + equipo de cada cruce de esta ronda
-    const ronda = RONDAS_ELIMINATORIA.find(r => r.key === concepto);
-    const matchIds = ronda ? ronda.matchIds : (concepto === 'tercerPuesto' ? ['tercer-1'] : []);
+    const ronda = RONDAS_ELIMINATORIA.find(r => r.key === concepto2);
+    const matchIds = ronda ? ronda.matchIds : (concepto2 === 'tercerPuesto' ? ['tercer-1'] : []);
     matchIds.forEach(matchId => {
       const pronostico = picks.find(p => p.partido_id === matchId);
       const real = getPlayoffPartidoResuelto(matchId);
       const faseKey = ronda ? ronda.faseKey : '3er puesto';
-      const { pts: ptsResultado, tipo } = calcPlayoffMatchPoints(pronostico, real, faseKey);
-      if (pronostico && pronostico.equipoA) {
-        const label = `${getFlag(pronostico.equipoA)} ${pronostico.equipoA} ${pronostico.gL||'?'}-${pronostico.gV||'?'} ${pronostico.equipoB} ${getFlag(pronostico.equipoB)}`;
-        if (ptsResultado > 0) {
-          filas.push({ label, pts: ptsResultado, sub: 'resultado del cruce' });
-        } else if (real && real.gL !== '') {
-          filas.push({ label, pts: 0, sub: tipo === 'cruce_fallado' ? 'cruce distinto al real' : 'resultado fallado' });
+      if (modo !== 'equipo') {
+        const { pts: ptsResultado, tipo } = calcPlayoffMatchPoints(pronostico, real, faseKey);
+        if (pronostico && pronostico.equipoA) {
+          const label = `${getFlag(pronostico.equipoA)} ${pronostico.equipoA} ${pronostico.gL||'?'}-${pronostico.gV||'?'} ${pronostico.equipoB} ${getFlag(pronostico.equipoB)}`;
+          if (ptsResultado > 0) {
+            filas.push({ label, pts: ptsResultado, sub: 'resultado del cruce' });
+          } else if (real && real.gL !== '') {
+            filas.push({ label, pts: 0, sub: tipo === 'cruce_fallado' ? 'cruce distinto al real' : 'resultado fallado' });
+          }
         }
       }
       // Bonus de equipo que avanza A LA SIGUIENTE RONDA (p.ej. de
       // dieciseisavos a octavos). Se muestra en TODAS las rondas, incluida
       // dieciseisavos — no hay que confundirlo con el bonus de fase de
-      // grupos → dieciseisavos (ese es un concepto distinto, ya mostrado
-      // arriba solo cuando concepto === 'dieciseisavos'). 3º/4º puesto no
-      // genera bonus de avance porque no hay ronda siguiente tras esa.
-      if (concepto !== 'tercerPuesto') {
+      // grupos → dieciseisavos (ese es un concepto distinto, vive en
+      // "Equipos 1/16"). 3º/4º puesto no genera bonus de avance porque no
+      // hay ronda siguiente tras esa.
+      if (concepto2 !== 'tercerPuesto' && modo !== 'resultado') {
         const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
         const clasifReal = getEquipoClasificadoReal(matchId);
         if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal)) {
@@ -3610,7 +3586,7 @@ function showDetalle(jugador, concepto) {
     });
 
     // Bonus especiales de semifinal (clasificado a final / a 3º-4º puesto)
-    if (concepto === 'semifinal') {
+    if (concepto2 === 'semifinal' && modo !== 'resultado') {
       ['semis-1','semis-2'].forEach(matchId => {
         const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
         const clasifReal = getEquipoClasificadoReal(matchId);
