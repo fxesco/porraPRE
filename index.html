@@ -3010,63 +3010,53 @@ function calcPlayoffPointsForPlayer(jugador) {
   // clasifica de cada grupo, en cualquier posición) ya NO se suma aquí.
   // Esa puntuación vive ahora exclusivamente en "Equipos 1/16"
   // (calcPosGruposYEquiposClasificados), que reproduce la fórmula real del
-  // Excel de control. Antes se sumaba en los dos sitios a la vez (doble
-  // conteo) — desde aquí en adelante, "dieciseisavos.equipo" SOLO contiene
-  // el acierto de qué equipo avanza de dieciseisavos a octavos (un cruce
-  // real de R16 con resultado), nunca el de fase de grupos.
+  // Excel de control.
   const aciertosClasifGrupos = 0;
 
+  // Puntos de RESULTADO de cada ronda (signo/diferencia/exacto del propio
+  // cruce) — esto sí se queda en la ronda a la que pertenece el partido.
   RONDAS_ELIMINATORIA.forEach(ronda => {
-    let ptsResultadoRonda = 0, ptsClasifRonda = 0;
+    let ptsResultadoRonda = 0;
     ronda.matchIds.forEach(matchId => {
       const pronostico = picks.find(p => p.partido_id === matchId);
       // getPlayoffPartidoResuelto: aunque resultados.json deje local/visitante
       // vacíos (caso normal), aquí necesitamos el nombre real del equipo para
       // poder comparar el cruce pronosticado — si no, nunca coincidiría.
       const real = getPlayoffPartidoResuelto(matchId);
-
       const { pts: ptsResultado } = calcPlayoffMatchPoints(pronostico, real, ronda.faseKey);
       ptsResultadoRonda += ptsResultado;
-
-      // Puntos de "equipo que avanza a la ronda siguiente" se anotan en la
-      // ronda ANTERIOR, según CONFIG.PTS[faseKey].clasificado.
-      const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
-      const clasifReal = getEquipoClasificadoReal(matchId);
-      if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal)) {
-        const ptsClasif = CONFIG.PTS[ronda.faseKey]?.clasificado;
-        if (ptsClasif) ptsClasifRonda += ptsClasif;
-      }
     });
     desglose[ronda.key].resultado = ptsResultadoRonda;
-    desglose[ronda.key].equipo += ptsClasifRonda;
   });
 
-  // Semifinal tiene además los bonus de clasificado a 3º/4º puesto y a la final
-  let ptsClasifSemis = 0;
-  ['semis-1','semis-2'].forEach(matchId => {
-    const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
-    const clasifReal = getEquipoClasificadoReal(matchId);
-    if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal)) {
-      ptsClasifSemis += CONFIG.PTS['Semifinal']?.clasificado_final || 0;
-    }
-    const pronostico = picks.find(p => p.partido_id === matchId);
-    const real = getPlayoffPartidoResuelto(matchId);
-    if (pronostico && real && clasifPron && real.gL !== '' && real.gV !== '') {
-      const realL = normEquipo(real.local), realV = normEquipo(real.visitante);
-      const pronA = normEquipo(pronostico.equipoA), pronB = normEquipo(pronostico.equipoB);
-      const mismoMatch = (pronA===realL && pronB===realV) || (pronA===realV && pronB===realL);
-      if (mismoMatch) {
-        const perdedorPron = normEquipo(clasifPron) === pronA ? pronostico.equipoB : pronostico.equipoA;
-        const perdedorReal = normEquipo(clasifReal) === realL ? real.visitante : real.local;
-        if (normEquipo(perdedorPron) === normEquipo(perdedorReal)) {
-          ptsClasifSemis += CONFIG.PTS['Semifinal']?.clasificado_3y4 || 0;
-        }
-      }
-    }
-  });
-  desglose.semifinal.equipo += ptsClasifSemis;
+  // Puntos de EQUIPO ("Equipos 1/8", "Equipos 1/4", "Equipos 1/2", "Equipos
+  // Final"): igual que "Equipos 1/16" (ver calcEquiposRondaPosterior), se
+  // construye la lista de candidatos pronosticados por el jugador para la
+  // ronda de DESTINO (el ganador que predijo para cada cruce de la ronda
+  // ANTERIOR) y se compara contra los equipos reales que avanzaron — sin
+  // esperar a que el cruce de la ronda de destino exista o se dispute. Por
+  // eso un acierto de R16 (p.ej. Canadá avanza) ya suma en "Equipos 1/8",
+  // no en "Equipos 1/16" (que es solo fase de grupos).
+  const eq8 = calcEquiposRondaPosterior(jugador, RONDAS_ELIMINATORIA[0].matchIds, CONFIG.PTS['Dieciseisavos']?.clasificado || 0);
+  desglose.octavos.equipo = eq8.pts;
+  const eq4 = calcEquiposRondaPosterior(jugador, RONDAS_ELIMINATORIA[1].matchIds, CONFIG.PTS['Octavos']?.clasificado || 0);
+  desglose.cuartos.equipo = eq4.pts;
+  const eq2 = calcEquiposRondaPosterior(jugador, RONDAS_ELIMINATORIA[2].matchIds, CONFIG.PTS['Cuartos']?.clasificado || 0);
+  desglose.semifinal.equipo = eq2.pts;
 
-  // 3er/4º puesto: solo puntos de resultado (no genera bonus de "equipo" después)
+  // "Equipos Final" (ganador de cada semifinal → finalista) y "Equipos 3-4"
+  // (perdedor de cada semifinal → va al partido de consolación). Mismo
+  // patrón de lista-de-2-candidatos, sin exigir que el cruce completo
+  // coincida — solo que el equipo predicho como ganador/perdedor de ESA
+  // semifinal concreta sea uno de los 2 reales (en cualquiera de las 2).
+  const semiMatchIds = ['semis-1', 'semis-2'];
+  const eqFinal = calcEquiposRondaPosterior(jugador, semiMatchIds, CONFIG.PTS['Semifinal']?.clasificado_final || 0, 'ganador');
+  desglose.final.equipo = eqFinal.pts;
+  const eq34 = calcEquiposRondaPosterior(jugador, semiMatchIds, CONFIG.PTS['Semifinal']?.clasificado_3y4 || 0, 'perdedor');
+  desglose.tercerPuesto.equipo = eq34.pts;
+
+  // 3er/4º puesto: solo puntos de RESULTADO del partido en sí (el bonus de
+  // "equipo" de esta columna ya se calculó arriba, eq34).
   const pronostico3 = picks.find(p => p.partido_id === 'tercer-1');
   const real3 = getPlayoffPartidoResuelto('tercer-1');
   const { pts: pts3 } = calcPlayoffMatchPoints(pronostico3, real3, '3er puesto');
@@ -3193,6 +3183,59 @@ function calcPosGruposYEquiposClasificados(jugador) {
   return { ptsPosGrupos, aciertosPosGrupos, ptsEquipos116, aciertosEquipos116 };
 }
 
+// ── EQUIPOS 1/8, 1/4, 1/2 ──
+// Mismo patrón que "Equipos 1/16" (ver calcPosGruposYEquiposClasificados),
+// pero para las rondas posteriores: se construye una lista de N equipos
+// "pronosticados" (el ganador que el jugador predijo para cada uno de sus
+// cruces de la ronda anterior) y se compara, sin importar posición ni
+// cruce, contra los N equipos REALES que avanzaron — usando
+// getEquipoClasificadoReal(), que ya sabe devolver el ganador real de un
+// cruce en cuanto se conoce (o null si ese cruce de R16/octavos/cuartos
+// aún no se ha jugado). Por eso un acierto temprano de dieciseisavos
+// (p.ej. Canadá avanzando) ya puede sumar aquí, sin esperar a que el
+// partido de octavos en sí exista o se dispute — igual que en el Excel
+// de control, que resuelve cada candidato en cuanto se conoce el ganador
+// de su cruce anterior (placeholders tipo "W74" mientras no se sabe).
+//
+// matchIdsRondaAnterior: los matchId de la ronda cuyo ganador alimenta esta
+// lista (16 de R16 para "equipos8", 8 de octavos para "equipos4", 4 de
+// cuartos para "equipos2"). ptsPorAcierto: CONFIG.PTS[faseSiguiente].clasificado.
+function calcEquiposRondaPosterior(jugador, matchIdsRondaAnterior, ptsPorAcierto, lado = 'ganador') {
+  const picks = state.pronosticos.filter(p => p.jugador === jugador);
+
+  const obtenerLado = (matchId) => {
+    if (lado === 'ganador') {
+      return getEquipoClasificadoReal(matchId);
+    }
+    // 'perdedor': el lado contrario al ganador real de ese cruce
+    const partido = getPlayoffPartidoResuelto(matchId);
+    const ganador = getEquipoClasificadoReal(matchId);
+    if (!partido || !ganador || partido.gL === '' || partido.gV === '') return null;
+    return normEquipo(ganador) === normEquipo(partido.local) ? partido.visitante : partido.local;
+  };
+  const obtenerLadoPron = (matchId) => {
+    const pronostico = picks.find(p => p.partido_id === matchId);
+    if (!pronostico) return null;
+    if (lado === 'ganador') return getEquipoClasificadoPronosticado(picks, matchId);
+    // 'perdedor' pronosticado: el lado contrario al ganador que predijo el jugador
+    const ganadorPron = getEquipoClasificadoPronosticado(picks, matchId);
+    if (!ganadorPron) return null;
+    return normEquipo(ganadorPron) === normEquipo(pronostico.equipoA) ? pronostico.equipoB : pronostico.equipoA;
+  };
+
+  const listaPron = matchIdsRondaAnterior.map(matchId => obtenerLadoPron(matchId)).filter(Boolean);
+  const listaRealNorm = matchIdsRondaAnterior
+    .map(matchId => obtenerLado(matchId))
+    .filter(Boolean)
+    .map(normEquipo);
+
+  let aciertos = 0;
+  listaPron.forEach(eq => {
+    if (listaRealNorm.includes(normEquipo(eq))) aciertos++;
+  });
+  return { pts: aciertos * ptsPorAcierto, aciertos };
+}
+
 // ── RANKING ──
 function buildRanking() {
   return state.players.map(jugador => {
@@ -3220,10 +3263,10 @@ function buildRanking() {
     // ya está incluido aquí, dentro de elim.dieciseisavos.equipo.
     const elim = calcPlayoffPointsForPlayer(jugador);
 
-    // "Pos. Grupos" y "Equipos 1/16": vista informativa adicional que
-    // replica las columnas homónimas del Excel de control. NO se suman al
-    // total de la porra (ese ya usa elim.dieciseisavos.equipo, con su
-    // propia lógica) — son solo para consulta/comparación.
+    // "Pos. Grupos" y "Equipos 1/16": replican las columnas homónimas del
+    // Excel de control. SÍ forman parte del total de la porra — verificado
+    // numéricamente contra el Excel real (343 = 146 F.Grupos + 93 Pos.Grupos
+    // + 104 Equipos 1/16, para Cuco con la fase de grupos ya cerrada).
     const posGruposYEquipos = calcPosGruposYEquiposClasificados(jugador);
 
     // Predicciones finales — guardamos también CUÁLES se acertaron, para mostrarlo
@@ -3245,7 +3288,7 @@ function buildRanking() {
     if (resultados.balon_plata && pred.balon_plata === resultados.balon_plata) { ptsPremios += CONFIG.PTS_BALON_PLATA; aciertosPremios.push('Balón Plata'); }
     if (resultados.balon_bronce&& pred.balon_bronce=== resultados.balon_bronce){ ptsPremios += CONFIG.PTS_BALON_BRONCE; aciertosPremios.push('Balón Bronce'); }
 
-    const pts = ptsGrupos + elim.total + ptsPredicciones + ptsPremios;
+    const pts = ptsGrupos + posGruposYEquipos.ptsPosGrupos + posGruposYEquipos.ptsEquipos116 + elim.total + ptsPredicciones + ptsPremios;
 
     return {
       nombre: jugador, pts, exactos, signos, fallos, jugados,
@@ -3393,12 +3436,19 @@ function showDetalle(jugador, concepto) {
     const r = buildRanking().find(x => x.nombre === jugador);
     if (r) {
       filas.push({ label: 'Fase de grupos (resultado)', pts: r.ptsGrupos });
-      filas.push({ label: 'Dieciseisavos', pts: r.dieciseisavos.total, sub: `Res:${r.dieciseisavos.resultado} · Eq:${r.dieciseisavos.equipo}` });
-      filas.push({ label: 'Octavos', pts: r.octavos.total, sub: `Res:${r.octavos.resultado} · Eq:${r.octavos.equipo}` });
-      filas.push({ label: 'Cuartos', pts: r.cuartos.total, sub: `Res:${r.cuartos.resultado} · Eq:${r.cuartos.equipo}` });
-      filas.push({ label: 'Semifinal', pts: r.semifinal.total, sub: `Res:${r.semifinal.resultado} · Eq:${r.semifinal.equipo}` });
-      filas.push({ label: '3º/4º puesto', pts: r.tercerPuesto.total, sub: `Res:${r.tercerPuesto.resultado}` });
-      filas.push({ label: 'Final', pts: r.final.total, sub: `Res:${r.final.resultado} · Eq:${r.final.equipo}` });
+      filas.push({ label: 'Pos. Grupos', pts: r.ptsPosGrupos, sub: `${r.aciertosPosGrupos} aciertos de posición` });
+      filas.push({ label: 'Equipos 1/16', pts: r.ptsEquipos116, sub: `${r.aciertosEquipos116} equipos acertados` });
+      filas.push({ label: 'Partidos 1/16', pts: r.dieciseisavos.resultado });
+      filas.push({ label: 'Equipos 1/8', pts: r.octavos.equipo });
+      filas.push({ label: 'Partidos 1/8', pts: r.octavos.resultado });
+      filas.push({ label: 'Equipos 1/4', pts: r.cuartos.equipo });
+      filas.push({ label: 'Partidos 1/4', pts: r.cuartos.resultado });
+      filas.push({ label: 'Equipos 1/2', pts: r.semifinal.equipo });
+      filas.push({ label: 'Partidos 1/2', pts: r.semifinal.resultado });
+      filas.push({ label: 'Equipos 3-4', pts: r.tercerPuesto.equipo });
+      filas.push({ label: 'Partido 3-4', pts: r.tercerPuesto.resultado });
+      filas.push({ label: 'Equipos Final', pts: r.final.equipo });
+      filas.push({ label: 'Partido Final', pts: r.final.resultado });
       filas.push({ label: 'Predicciones finales', pts: r.ptsPredicciones, sub: r.aciertosPredicciones.join(', ') || '—' });
       filas.push({ label: 'Premios individuales', pts: r.ptsPremios, sub: r.aciertosPremios.join(', ') || '—' });
     }
@@ -3515,21 +3565,15 @@ function showDetalle(jugador, concepto) {
     });
   }
 
-  else if (['dieciseisavos','octavos','cuartos','semifinal','tercerPuesto','final',
-            'partidos16','equipos8','partidos8','equipos4','partidos4',
+  else if (['partidos16','equipos8','partidos8','equipos4','partidos4',
             'equipos2','partidos2','equipos34','partido34','equiposFinal','partidoFinal'].includes(concepto)) {
-    // Mapeo concepto → { rondaKey, modo }. modo 'resultado' muestra solo las
-    // filas de "Partidos X" (signo/diff/exacto del cruce); modo 'equipo'
-    // muestra solo las de "Equipos X" (qué equipo avanza); modo 'ambos' es
-    // el comportamiento combinado original (se mantiene por si algo más en
-    // la app sigue llamando a showDetalle con la clave de ronda original).
+    // Mapeo concepto → { rondaKey, modo }. modo 'resultado' muestra las
+    // filas de "Partidos X" (signo/diff/exacto del cruce, propio de esa
+    // ronda); modo 'equipo' muestra las de "Equipos X" (qué equipo avanzó
+    // DESDE la ronda anterior hasta esta, usando la misma lista progresiva
+    // de candidatos que calcEquiposRondaPosterior — no depende de que el
+    // cruce de la ronda actual exista o se haya jugado).
     const MAPA_CONCEPTO = {
-      dieciseisavos: { rondaKey: 'dieciseisavos', modo: 'ambos' },
-      octavos:       { rondaKey: 'octavos',       modo: 'ambos' },
-      cuartos:       { rondaKey: 'cuartos',       modo: 'ambos' },
-      semifinal:     { rondaKey: 'semifinal',     modo: 'ambos' },
-      tercerPuesto:  { rondaKey: 'tercerPuesto',  modo: 'ambos' },
-      final:         { rondaKey: 'final',         modo: 'ambos' },
       partidos16:    { rondaKey: 'dieciseisavos', modo: 'resultado' },
       equipos8:      { rondaKey: 'octavos',       modo: 'equipo' },
       partidos8:     { rondaKey: 'octavos',       modo: 'resultado' },
@@ -3544,21 +3588,17 @@ function showDetalle(jugador, concepto) {
     };
     const { rondaKey: concepto2, modo } = MAPA_CONCEPTO[concepto];
     const nombres = { dieciseisavos:'Dieciseisavos', octavos:'Octavos', cuartos:'Cuartos', semifinal:'Semifinal', tercerPuesto:'3º/4º puesto', final:'Final' };
-    const sufijoTitulo = modo === 'resultado' ? ' (partidos)' : modo === 'equipo' ? ' (equipos)' : '';
+    const sufijoTitulo = modo === 'resultado' ? ' (partidos)' : ' (equipos)';
     titulo = `${nombres[concepto2]}${sufijoTitulo} · ${jugador}`;
 
-    // NOTA: el bonus de "fase de grupos → dieciseisavos" ya no se muestra
-    // aquí — vive exclusivamente en el modal de "Equipos 1/16" (mismo
-    // concepto, una sola vez, sin duplicar el desglose).
-
-    // Resultado + equipo de cada cruce de esta ronda
-    const ronda = RONDAS_ELIMINATORIA.find(r => r.key === concepto2);
-    const matchIds = ronda ? ronda.matchIds : (concepto2 === 'tercerPuesto' ? ['tercer-1'] : []);
-    matchIds.forEach(matchId => {
-      const pronostico = picks.find(p => p.partido_id === matchId);
-      const real = getPlayoffPartidoResuelto(matchId);
+    // -- Parte "Partidos X": resultado de los cruces de ESTA ronda --
+    if (modo === 'resultado') {
+      const ronda = RONDAS_ELIMINATORIA.find(r => r.key === concepto2);
+      const matchIds = ronda ? ronda.matchIds : (concepto2 === 'tercerPuesto' ? ['tercer-1'] : []);
       const faseKey = ronda ? ronda.faseKey : '3er puesto';
-      if (modo !== 'equipo') {
+      matchIds.forEach(matchId => {
+        const pronostico = picks.find(p => p.partido_id === matchId);
+        const real = getPlayoffPartidoResuelto(matchId);
         const { pts: ptsResultado, tipo } = calcPlayoffMatchPoints(pronostico, real, faseKey);
         if (pronostico && pronostico.equipoA) {
           const label = `${getFlag(pronostico.equipoA)} ${pronostico.equipoA} ${pronostico.gL||'?'}-${pronostico.gV||'?'} ${pronostico.equipoB} ${getFlag(pronostico.equipoB)}`;
@@ -3568,48 +3608,52 @@ function showDetalle(jugador, concepto) {
             filas.push({ label, pts: 0, sub: tipo === 'cruce_fallado' ? 'cruce distinto al real' : 'resultado fallado' });
           }
         }
-      }
-      // Bonus de equipo que avanza A LA SIGUIENTE RONDA (p.ej. de
-      // dieciseisavos a octavos). Se muestra en TODAS las rondas, incluida
-      // dieciseisavos — no hay que confundirlo con el bonus de fase de
-      // grupos → dieciseisavos (ese es un concepto distinto, vive en
-      // "Equipos 1/16"). 3º/4º puesto no genera bonus de avance porque no
-      // hay ronda siguiente tras esa.
-      if (concepto2 !== 'tercerPuesto' && modo !== 'resultado') {
-        const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
-        const clasifReal = getEquipoClasificadoReal(matchId);
-        if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal)) {
-          const ptsClasif = CONFIG.PTS[faseKey]?.clasificado || 0;
-          if (ptsClasif) filas.push({ label: `${getFlag(clasifPron)} ${clasifPron} avanza de ronda`, pts: ptsClasif, sub: 'equipo clasificado' });
-        }
-      }
-    });
-
-    // Bonus especiales de semifinal (clasificado a final / a 3º-4º puesto)
-    if (concepto2 === 'semifinal' && modo !== 'resultado') {
-      ['semis-1','semis-2'].forEach(matchId => {
-        const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
-        const clasifReal = getEquipoClasificadoReal(matchId);
-        if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal)) {
-          const pts = CONFIG.PTS['Semifinal']?.clasificado_final || 0;
-          if (pts) filas.push({ label: `${getFlag(clasifPron)} ${clasifPron} finalista`, pts, sub: 'clasificado a la final' });
-        }
-        const pronostico = picks.find(p => p.partido_id === matchId);
-        const real = getPlayoffPartidoResuelto(matchId);
-        if (pronostico && real && clasifPron && real.gL !== '') {
-          const realL = normEquipo(real.local), realV = normEquipo(real.visitante);
-          const pronA = normEquipo(pronostico.equipoA), pronB = normEquipo(pronostico.equipoB);
-          const mismoMatch = (pronA===realL && pronB===realV) || (pronA===realV && pronB===realL);
-          if (mismoMatch) {
-            const perdedorPron = normEquipo(clasifPron) === pronA ? pronostico.equipoB : pronostico.equipoA;
-            const perdedorReal = normEquipo(clasifReal) === realL ? real.visitante : real.local;
-            if (normEquipo(perdedorPron) === normEquipo(perdedorReal)) {
-              const pts = CONFIG.PTS['Semifinal']?.clasificado_3y4 || 0;
-              if (pts) filas.push({ label: `${getFlag(perdedorPron)} ${perdedorPron} a 3º/4º puesto`, pts, sub: 'clasificado al partido de consolación' });
-            }
-          }
-        }
       });
+    }
+
+    // -- Parte "Equipos X": qué equipo avanzó DESDE la ronda anterior --
+    // Usa la lista de candidatos de la ronda ANTERIOR (mismo patrón que
+    // calcEquiposRondaPosterior), incluyendo R16→octavos, octavos→cuartos,
+    // cuartos→semifinal, semifinal→final (ganador) y semifinal→3º/4º (perdedor).
+    if (modo === 'equipo') {
+      const RONDA_ANTERIOR = { octavos: 0, cuartos: 1, semifinal: 2 };
+      if (concepto2 in RONDA_ANTERIOR) {
+        const matchIdsAnterior = RONDAS_ELIMINATORIA[RONDA_ANTERIOR[concepto2]].matchIds;
+        const faseAnterior = RONDAS_ELIMINATORIA[RONDA_ANTERIOR[concepto2]].faseKey;
+        const ptsClasif = CONFIG.PTS[faseAnterior]?.clasificado || 0;
+        matchIdsAnterior.forEach(matchId => {
+          const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
+          const clasifReal = getEquipoClasificadoReal(matchId);
+          if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal) && ptsClasif) {
+            filas.push({ label: `${getFlag(clasifPron)} ${clasifPron} avanza de ronda`, pts: ptsClasif, sub: 'equipo clasificado' });
+          }
+        });
+      } else if (concepto2 === 'final') {
+        // Equipos Final: ganador de cada semifinal
+        ['semis-1','semis-2'].forEach(matchId => {
+          const clasifPron = getEquipoClasificadoPronosticado(picks, matchId);
+          const clasifReal = getEquipoClasificadoReal(matchId);
+          if (clasifPron && clasifReal && normEquipo(clasifPron) === normEquipo(clasifReal)) {
+            const pts = CONFIG.PTS['Semifinal']?.clasificado_final || 0;
+            if (pts) filas.push({ label: `${getFlag(clasifPron)} ${clasifPron} finalista`, pts, sub: 'clasificado a la final' });
+          }
+        });
+      } else if (concepto2 === 'tercerPuesto') {
+        // Equipos 3-4: perdedor de cada semifinal
+        ['semis-1','semis-2'].forEach(matchId => {
+          const partido = getPlayoffPartidoResuelto(matchId);
+          const ganador = getEquipoClasificadoReal(matchId);
+          const ganadorPron = getEquipoClasificadoPronosticado(picks, matchId);
+          const pronostico = picks.find(p => p.partido_id === matchId);
+          if (!partido || !ganador || partido.gL === '' || !pronostico || !ganadorPron) return;
+          const perdedorReal = normEquipo(ganador) === normEquipo(partido.local) ? partido.visitante : partido.local;
+          const perdedorPron = normEquipo(ganadorPron) === normEquipo(pronostico.equipoA) ? pronostico.equipoB : pronostico.equipoA;
+          if (perdedorPron && perdedorReal && normEquipo(perdedorPron) === normEquipo(perdedorReal)) {
+            const pts = CONFIG.PTS['Semifinal']?.clasificado_3y4 || 0;
+            if (pts) filas.push({ label: `${getFlag(perdedorPron)} ${perdedorPron} a 3º/4º puesto`, pts, sub: 'clasificado al partido de consolación' });
+          }
+        });
+      }
     }
   }
 
